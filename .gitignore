@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Test/tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Data (not code — excluded per challenge submission rules)
+relevant_priors_public.json
+
+# Build artifact (regenerate with zip script)
+submission.zip
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
