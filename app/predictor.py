@@ -208,40 +208,45 @@ _BRIDGE_RULES: list[tuple[str, str, str]] = [
     (
         "current_bilat_screen_us__prior_mammo",
         r"ULTRASOUND\s+BILAT\s+SCREEN|DIGITAL\s+SCREENER|COMBOHD",
-        r"MAMMO|\bMAM\b|BREAST",
+        # Prior widened to include the same screener aliases — in this
+        # dataset bilateral-screening US and digital screener priors
+        # represent the same mammography workup and should match each
+        # other (3 FN on the public split otherwise).
+        r"MAMMO|\bMAM\b|BREAST|DIGITAL\s+SCREENER|COMBOHD|ULTRASOUND\s+BILAT\s+SCREEN",
     ),
-    # Spine adjacency (only between neighbouring levels — C↔T and T↔L):
-    # radiologists commonly read adjacent-level spine priors because
-    # pathology crosses levels. C↔L is NOT included (too far apart — high FP).
+    # Spine adjacency — only keep the directions that are net-positive on the
+    # public split. C↔T (current=C) is 57 % True and stays. L→T is 37 %, still
+    # slightly positive. The reverse T→C direction was dropped: on 33 pairs
+    # it was only 36 % True (12 TP vs 21 FP), driven by MRI T-spine pulling
+    # in XR cervical / "CERVICL SPINE, LIMITED" priors that almost always
+    # ended up labeled False. Same-modality T→C is too sparse to justify a
+    # narrow re-add. C↔L and T↔L are also omitted for base-rate reasons.
     (
         "current_cspine__prior_tspine",
         r"\bCERVIC|CERVICL|\bC[-\s]?SPINE\b|\bCERV\s+SPINE\b",
         r"THORACIC\s*SPINE|\bT[-\s]?SPINE\b",
     ),
     (
-        "current_tspine__prior_cspine",
-        r"THORACIC\s*SPINE|\bT[-\s]?SPINE\b",
-        r"\bCERVIC|CERVICL|\bC[-\s]?SPINE\b|\bCERV\s+SPINE\b",
-    ),
-    (
         "current_lspine__prior_tspine",
         r"LUMBAR\s*SPINE|\bL[-\s]?SPINE\b",
         r"THORACIC\s*SPINE|\bT[-\s]?SPINE\b",
     ),
-    # T↔L current_tspine__prior_lspine is omitted: label rate 27 % on the
-    # public split, only marginally above the 24 % base rate, and adds more
-    # FPs than TPs.
-    # C-spine / head CT overlap — craniocervical junction imaging.
+    # Plain-film T-spine (current) → C-spine (prior, any modality). Narrow
+    # re-add of the T→C bridge limited to XR/plain-film T-spine currents —
+    # these are 71 % True on the public split (10 TP / 4 FP on 14 pairs),
+    # unlike MRI T-spine currents which were a coin flip (36 % True).
     (
-        "current_headct__prior_cspine",
-        r"(?:CT|MRI?)\s+(?:HEAD|BRAIN)",
-        r"CERVIC|CERVICL|\bC\s*SPINE\b",
+        "current_xr_tspine__prior_cspine",
+        r"XR\s+THORACIC|XR\s+T[-\s]?SPINE|^THORACIC\s+SPINE\s+\d+\s*V|^T[-\s]?SPINE\s+\d+\s*V",
+        r"\bCERVIC|CERVICL|\bC[-\s]?SPINE\b|\bCERV\s+SPINE\b",
     ),
-    (
-        "current_cspine__prior_headct",
-        r"CERVIC|CERVICL|\bC\s*SPINE\b",
-        r"(?:CT|MRI?)\s+(?:HEAD|BRAIN)",
-    ),
+    # NOTE: head CT ↔ C-spine bridges were removed — on the public split both
+    # directions hit ~10 % True (head CT→cspine 7/74 = 9.5 %, cspine→head CT
+    # 11/86 = 12.8 %), so the bridge generated far more FPs than TPs despite
+    # the clinical intuition of craniocervical-junction overlap. Radiologists
+    # rarely read the head CT when evaluating a c-spine study (and vice versa)
+    # unless the order is specifically a polytrauma survey, which is already
+    # covered by region overlap when both modalities are cross-sectional.
     # Carotid US ↔ head CT.
     (
         "current_carotid_us__prior_headct",
@@ -260,10 +265,21 @@ _BRIDGE_RULES: list[tuple[str, str, str]] = [
     # We deliberately do NOT match bare "Chest" (a legacy descriptor in the
     # data, mostly labeled False). ONE-WAY — current XR chest + prior T-spine
     # was labeled False often enough to be unsafe.
+    # T-spine (current) ↔ chest priors. Cross-sectional chest priors (CT/MRI)
+    # pair with T-spine at 94 % True regardless of current modality. Plain
+    # chest XR priors only pair reliably when the T-spine current is itself
+    # a plain film — MRI T-spine → chest XR is a coin flip (45 % True, 13 TP
+    # vs 16 FP on the public split), so we suppress the bridge there via
+    # _BRIDGE_CURRENT_EXCLUSIONS below.
     (
-        "current_tspine__prior_chest_with_modality",
+        "current_tspine__prior_cross_section_chest",
         r"THORACIC\s*SPINE|\bT[-\s]?SPINE\b",
-        r"CHEST\s+\d+\s*V|CHEST\s+1\s*V|\bCXR\b|CT\s+CHEST|MRI?\s+CHEST|XR\s+CHEST|RIBS",
+        r"CT\s+CHEST|MRI?\s+CHEST",
+    ),
+    (
+        "current_tspine__prior_chest_xr",
+        r"THORACIC\s*SPINE|\bT[-\s]?SPINE\b",
+        r"CHEST\s+\d+\s*V|CHEST\s+1\s*V|\bCXR\b|XR\s+CHEST",
     ),
     # Cholangiogram (biliary XR) ↔ CT abdomen/pelvis (biliary tree imaged).
     (
@@ -271,10 +287,12 @@ _BRIDGE_RULES: list[tuple[str, str, str]] = [
         r"CHOLANGIO|\bERCP\b",
         r"\bCT\b.*ABD",
     ),
-    # Thoracentesis (CT guided) ↔ prior chest imaging.
+    # Thoracentesis (CT guided) ↔ prior chest imaging. PARACENTES (peritoneal
+    # tap — an abdominal procedure) was intentionally excluded: 0/6 True on
+    # the public split when bridged to chest priors.
     (
         "current_thoracentesis__prior_chest",
-        r"THORACENTES|PARACENTES",
+        r"THORACENTES",
         r"\bCHEST\b|\bCT\b\s+CHEST|RIBS",
     ),
     # Esophagram (current) ↔ CT chest (prior).
@@ -324,22 +342,11 @@ _BRIDGE_RULES: list[tuple[str, str, str]] = [
         r"SCOLIOSIS|SPINE\s+SURV",
         r"\bCHEST\b|CT\s+LUMBAR\s*SPINE|CT\s+CERVIC",
     ),
-    # Cervical spine (current) ↔ CT head/brain (prior) — cervical fractures
-    # commonly evaluated with head CT overlap.
-    (
-        "current_cspine__prior_head_ct",
-        r"CERVICAL\s*SPINE|\bC[-\s]?SPINE\b|CERVICL\s*SPINE",
-        r"(?:CT|MRI?)\s+(?:HEAD|BRAIN)",
-    ),
-    # Neurovascular crosswalk: CT angio carotid ↔ CT head (CT only, not MRI).
-    # Public-split stats: carotid angio ↔ MRI brain is 10% True, while ↔
-    # CT head is ~50% True. Reverse direction (head CT → prior carotid
-    # angio) is only 34% True so we do not bridge it.
-    (
-        "current_carotid_angio__prior_ct_head",
-        r"ANGIO\s+CAROTID|CT\s+ANGIO\s+NECK",
-        r"\bCT\b\s+(?:HEAD|BRAIN)|CT\s+BRAIN\s+PERFUSION",
-    ),
+    # (A second cspine ↔ head CT bridge was removed above — same reason.)
+    # NOTE: neurovascular bridge (CT angio carotid → CT head) was dropped.
+    # On the public split it drifted to 44 % True (12 TP / 15 FP on 27 pairs)
+    # after other rules reclaimed some of the same TPs via region/family
+    # overlap. Dropping converts a net-negative bridge into a small win.
     # Pelvic/endovaginal US (any variant) ↔ CT abd/pel.
     (
         "current_pelvic_us__prior_ct_abd_pel",
@@ -366,6 +373,54 @@ _BRIDGE_RULES: list[tuple[str, str, str]] = [
         r"ESOPHAGRAM|ESOPHAG|BARIUM\s+SWALLOW|SWALLOW\s+STUDY",
         r"\bXR\s+CHEST\b|CHEST\s+\d+\s*V|CHEST\s+1\s*V|\bCXR\b",
     ),
+    # MR pelvis (current) → MR lumbar spine (prior). Pelvic MRI often images
+    # the lower spine secondarily and the radiologist pulls the prior L-spine
+    # MR for correlation. 78 % True on the public split (7 TP / 2 FP on 9
+    # pairs). One-way only: the reverse (L-spine → pelvis) was 14 % True.
+    (
+        "current_mri_pelvis__prior_mri_lspine",
+        r"MRI?\s+PELVIS|MR\s+PELVIS",
+        r"MRI?\s+LUMBAR|MR\s+LUMBAR|MRI?\s+L[-\s]?SPINE",
+    ),
+    # Kidney / renal US ↔ US abdominal. 100 % True both ways (7 pairs total
+    # on the public split) — renal ultrasound IS substantially overlapping
+    # with a complete abdominal ultrasound window.
+    (
+        "current_kidney_us__prior_us_abd",
+        r"US\s+KIDNEY|US\s+RENAL|KIDNEYS?\s+AND\s+BLADDER|RENAL\s+ULTRASOUND",
+        r"US\s+ABDOM",
+    ),
+    (
+        "current_us_abd__prior_kidney_us",
+        r"US\s+ABDOM",
+        r"US\s+KIDNEY|US\s+RENAL|KIDNEYS?\s+AND\s+BLADDER|RENAL\s+ULTRASOUND",
+    ),
+    # CT cervical spine (current) → CT head/brain (prior). 91 % True on the
+    # public split (10 TP / 1 FP on 11 pairs) — trauma c-spine CTs are
+    # routinely read with the head CT. CT-modality only: the MRI variant was
+    # 0 % True, and the head→cspine reverse direction was 44 %.
+    (
+        "current_ct_cspine__prior_ct_head",
+        r"\bCT\b\s+CERVIC|\bCT\b\s+C[-\s]?SPINE",
+        r"\bCT\b\s+(?:HEAD|BRAIN)",
+    ),
+    # CT chest with contrast (current) → CT coronary calcium / CT coronary
+    # (prior). 7 / 7 True on the public split — contrast chest CT in the
+    # coronary-artery workflow is routinely read against the calcium score.
+    (
+        "current_ct_chest__prior_coronary_calc",
+        r"\bCT\b\s+CHEST",
+        r"CT\s+CORONARY\s+CALC|CORONARY\s+CALC\s+SCREEN|CALCIUM\s+SCORE",
+    ),
+    # CT coronary calcium score (current) → chest XR (prior). 5 / 8 True
+    # (62 %) on the public split. Calcium scoring is a cardiac workup
+    # and a prior chest XR is routinely reviewed. One-way — chest XR
+    # currents against a CT coronary prior are 39 % True (net-negative).
+    (
+        "current_ct_coronary_calc__prior_chest_xr",
+        r"CT\s+CORONARY\s+CALC|CORONARY\s+CALC\s+SCREEN|CALCIUM\s+SCORE",
+        r"CHEST\s+\d+\s*V|CHEST\s+1\s*V|\bCXR\b|XR\s+CHEST",
+    ),
 ]
 
 _BRIDGE_COMPILED: list[tuple[str, re.Pattern[str], re.Pattern[str]]] = [
@@ -380,8 +435,196 @@ _BRIDGE_COMPILED: list[tuple[str, re.Pattern[str], re.Pattern[str]]] = [
 # relationship does not hold (e.g. cardiotoxicity surveillance echoes are
 # not actually asking about a prior chest CT, which was done for cancer).
 _BRIDGE_CURRENT_EXCLUSIONS: dict[str, re.Pattern[str]] = {
-    "current_cardiac__prior_ct_mri_chest": re.compile(r"CHEMO|\bLUM\b"),
+    # CHEMO / LUM TTE / DEFINITY bubble studies are ordered for reasons
+    # (cardiotoxicity surveillance, contrast-enhanced echo for LV function)
+    # that don't actually make a prior CT chest clinically relevant. On the
+    # public split DEFINITY-echo current → CT chest prior is 0 % True (5 FP
+    # out of 5 pairs) and CHEMO-echo is ~31 %.
+    "current_cardiac__prior_ct_mri_chest": re.compile(r"CHEMO|\bLUM\b|DEFINITY"),
+    # MRI T-spine → chest XR is 45 % True on the public split (near base
+    # rate). Suppress the bridge when the current is an MRI T-spine, keeping
+    # it live for XR / CT T-spine currents.
+    "current_tspine__prior_chest_xr": re.compile(r"\bMRI?\b|MAGNETIC"),
 }
+
+
+# Pair-level anti-rules: when the current matches `cur_pat` AND the prior
+# matches `pri_pat`, force the prediction to False regardless of any other
+# rule that might have fired. Used for cross-rule false positives we can't
+# narrow out by tightening individual rules (e.g. family-match FPs where
+# the family pattern legitimately applies elsewhere).
+_NEGATIVE_PAIR_RULES: list[tuple[str, str, str]] = [
+    # Pure CT angio head (no NECK/CAROTID in current) vs carotid US prior:
+    # matched via the neuro_vascular family on the CAROTID alias, but 0 %
+    # True on the public split (7 FP). Intracranial CTA doesn't actually
+    # comment on the carotid US.
+    (
+        "ctangio_head_vs_carotid_us",
+        r"^CT\s+ANGIO\s+HEAD(?!\s*(?:AND\s+)?(?:NECK|CAROTID))",
+        r"CAROTID\s*ULTRASOUND|VAS\s+US\s+CAROTID|\bUS\s+CAROTID\b",
+    ),
+    # US abdomen (current) vs bare "Abdomen" prior: 0 % True on public split
+    # (7 FP). US abdomen complete with doppler is a specific vascular/organ
+    # study; a generic "Abdomen" prior of unknown modality is not a match.
+    (
+        "us_abdomen_vs_bare_abdomen",
+        r"\bUS\s+ABDOM|ULTRASOUND\s+ABDOM|ABDOM.*DOPPL",
+        r"^ABDOMEN$",
+    ),
+    # CT abd/pel WITHOUT contrast (current) vs pelvic / endovaginal US
+    # (prior): 0 % True (4 FP) — CT abdpel without contrast is ordered for
+    # stones/trauma, not gyn workup.
+    (
+        "ct_abdpel_wo_contrast_vs_pelvic_us",
+        r"\bCT\b\s+ABD(?:OMEN)?\s+PEL\w*\s+W[O/]?\s*CON|"
+        r"\bCT\b\s+ABD(?:OMEN)?\s+PEL\w*\s+WITHOUT",
+        r"US\s+PELV|ENDOVAGIN|TRANSVAG",
+    ),
+    # Opposite-side laterality on a shared paired body part (handled by
+    # _is_laterality_mismatch below — covers MAM/BREAST, KNEE, HIP,
+    # SHOULDER, FOOT, ANKLE, WRIST, HAND, ELBOW, LEG at once).
+    # CT abd/pel with contrast (current) vs bare "Abdomen" prior: 0 / 5
+    # True on the public split. "w con" CT abdpels are usually ordered for
+    # specific pathology workups where the unmodified "Abdomen" prior
+    # (typically a plain film or unlabeled) is not the comparator.
+    (
+        "ct_abdpel_w_con_vs_bare_abdomen",
+        r"\bCT\b\s+ABD(?:OMEN)?.*\s+W\s+CON|\bCT\b\s+ABD(?:OMEN)?.*WITH\s+CON",
+        r"^ABDOMEN$",
+    ),
+    # CT abd/pel (current) vs plain-film pelvis XR (prior, "PELVIS 1 VIEW",
+    # "PELVIS - 1 OR 2 VIEWS"): 0 % True (6 FP) on the public split. The
+    # plain-film priors are pre-op / fall-workup orders unrelated to the
+    # cross-sectional abdomen study.
+    (
+        "ct_abdpel_vs_pelvis_xr",
+        r"\bCT\b\s+ABD(?:OMEN)?.*PEL",
+        r"^PELVIS\s+-?\s*\d|^PELVIS\s+\d+\s*V",
+    ),
+    # Plain chest XR (current) vs whole-body bone scan (prior): 0 % True
+    # (7 FP). The WHOLEBODY region expansion pulls bone-scan priors in
+    # against any chest prior, but a plain 1V/2V chest film is not the
+    # comparator for a bone scan.
+    (
+        "plain_chest_xr_vs_wb_bone_scan",
+        r"^(?:XR\s+)?CHEST\s+\d+\s*V|^CHEST\s+1\s*V|^CHEST\s+2\s*V|CHEST\s+FRONTAL",
+        r"BONE\s*SCAN\s+WHOLE\s*BODY|NM\s+BONE\s+SCAN\s+WHOLE",
+    ),
+    # Head / brain imaging (current) vs sinus / maxfacial / orbit (prior):
+    # 17 % True (2/12) on the public split. The BRAIN region pattern
+    # matches both brain and facial studies, but a CT/MRI brain is
+    # ordered for parenchymal pathology, not to review an old sinus scan.
+    # Reverse direction (sinus → brain) was 69 % True and is left intact.
+    (
+        "brain_cur_vs_sinus_maxfacial_prior",
+        r"(?:CT|MRI?)\s+(?:HEAD|BRAIN)|\bHEAD\s*/\s*BRAIN\b",
+        r"\bMAXFACIAL\b|MAX\s*FACIAL|\bSINUS|FACIAL\s+BONES?|\bORBIT\b",
+    ),
+    # DXA hip scan (current) vs unilateral hip XR (prior, "HIP, RIGHT"):
+    # 0 / 5 True on the public split. HIP region overlap fires because
+    # the DXA description includes "HIP", but a unilateral hip fracture /
+    # ortho XR is not a relevant comparator to a bone-density study.
+    (
+        "dxa_hip_cur_vs_unilateral_hip_xr",
+        r"DXA.*HIP|BONE\s*DENS.*HIP|\bDEXA\b.*HIP",
+        r"\bHIP\b.*\b(?:RT|RIGHT|LT|LFT|LEFT)\b|"
+        r"\b(?:RT|RIGHT|LT|LFT|LEFT)\b.*\bHIP\b",
+    ),
+    # LUM TTE (specialty contrast-enhanced echo) vs nuclear myocardial
+    # perfusion: same cardiac family, but 0 / 4 True — these are ordered
+    # for distinct reasons (LV function vs. ischemia) and the radiologist
+    # does not cross-read them.
+    (
+        "lum_tte_cur_vs_myo_perf_prior",
+        r"LUM\s+TTE|LUM.*DOPPL",
+        r"MYO\s*PERF|\bSPECT\b",
+    ),
+    # CT FFR (fractional flow reserve, a functional-anatomy coronary CT)
+    # vs prior echo: both cardiac family, but 0 / 4 True. FFR is read as
+    # a standalone functional study, not against a baseline echo.
+    (
+        "ct_ffr_cur_vs_echo_prior",
+        r"CT\s+FFR|\bFFR\b",
+        r"ECHO|\bTTE\b|\bTEE\b|TRANSTHORAC",
+    ),
+    # US head-and-neck soft tissue (current) vs thyroid US / soft-tissue
+    # neck US (prior): 0 / 5 True. The HEAD-AND-NECK post-filter maps cur
+    # to NECK region, which overlaps with the thyroid prior, but a generic
+    # "soft tissue neck" US prior is not the comparator for a specific
+    # head-and-neck US workup.
+    (
+        "us_head_neck_cur_vs_thyroid_us_prior",
+        r"US\s+HEAD\s+AND\s+NECK|US\s+SOFT\s+TISSUE\s+NECK|HEAD\s+AND\s+NECK.*US",
+        r"\bTHYROID\b|US\s+THYROID",
+    ),
+    # Transesophageal echo (current) vs chest XR (prior): 1 / 9 True.
+    # TEE is a cardiac study read from the esophagus — a prior chest
+    # radiograph is not part of that workup. Matched via the cardiac
+    # bridge→chest XR loop (via T-spine expansion or CARDIAC family).
+    (
+        "tee_cur_vs_chest_xr_prior",
+        r"ECHO\s+TRANSESOPH|\bTEE\b",
+        r"CHEST\s+\d+\s*V|CHEST\s+1\s*V|\bCXR\b|XR\s+CHEST",
+    ),
+]
+
+_NEGATIVE_PAIR_COMPILED: list[tuple[str, re.Pattern[str], re.Pattern[str]]] = [
+    (name, re.compile(cur_pat), re.compile(pri_pat))
+    for (name, cur_pat, pri_pat) in _NEGATIVE_PAIR_RULES
+]
+
+
+def _negative_pair_hit(cur_norm: str, pri_norm: str) -> bool:
+    """Return True when a pair is covered by an anti-rule (forced False)."""
+    for _name, cur_re, pri_re in _NEGATIVE_PAIR_COMPILED:
+        if cur_re.search(cur_norm) and pri_re.search(pri_norm):
+            return True
+    return False
+
+
+# Laterality markers used for opposite-side mismatch detection.
+_LATERALITY_RIGHT = re.compile(r"\b(?:RT|RIGHT)\b")
+_LATERALITY_LEFT = re.compile(r"\b(?:LT|LFT|LEFT)\b")
+
+# Regions where opposite-side (R vs L) priors are almost never mutually
+# relevant on the public split. Mammography / breast US opposite sides hit
+# 1/56 True (≈2 %); extremity opposite sides (knee/hip/shoulder/ankle/foot/
+# wrist/hand/elbow/leg) are 0/14 True cumulatively. Midline / axial regions
+# (CHEST, ABDOMEN, SPINE_*, HEART, BRAIN) are excluded — a "left chest wall"
+# prior against a "right chest wall" current is still the same CT chest
+# dataset and IS clinically relevant.
+_LATERALITY_PAIRED_REGIONS: frozenset[str] = frozenset({
+    "BREAST", "KNEE", "HIP", "SHOULDER",
+    "ANKLE", "FOOT", "HAND", "ELBOW", "LEG",
+})
+
+
+def _side(norm: str) -> str | None:
+    """Return 'R', 'L', or None based on laterality tokens in `norm`.
+
+    Descriptions mentioning both sides (e.g. bilateral) or neither return
+    None and are treated as unknown — they do NOT participate in mismatch
+    blocking.
+    """
+    has_r = bool(_LATERALITY_RIGHT.search(norm))
+    has_l = bool(_LATERALITY_LEFT.search(norm))
+    if has_r and not has_l:
+        return "R"
+    if has_l and not has_r:
+        return "L"
+    return None
+
+
+def _is_laterality_mismatch(
+    cur_norm: str, cur_regions: frozenset[str],
+    pri_norm: str, pri_regions: frozenset[str],
+) -> bool:
+    """True if cur/prior are on opposite sides of the same paired region."""
+    cs = _side(cur_norm)
+    ps = _side(pri_norm)
+    if cs is None or ps is None or cs == ps:
+        return False
+    return bool(cur_regions & pri_regions & _LATERALITY_PAIRED_REGIONS)
 
 
 def _bridge_hit(cur_norm: str, pri_norm: str) -> bool:
@@ -403,6 +646,18 @@ def predict(current_desc: str, prior_desc: str) -> bool:
     cur = _sig(current_desc)
     pri = _sig(prior_desc)
 
+    # Rule 0: uninformative bare prior descriptors short-circuit to False.
+    if pri.norm in _UNINFORMATIVE_BARE_PRIOR:
+        return False
+
+    # Rule 0b: pair-level anti-rules override everything below.
+    if _negative_pair_hit(cur.norm, pri.norm):
+        return False
+
+    # Rule 0c: opposite-side laterality on a shared paired region → False.
+    if _is_laterality_mismatch(cur.norm, cur.regions, pri.norm, pri.regions):
+        return False
+
     # Rule 1: exact normalized match.
     if cur.norm and cur.norm == pri.norm:
         return True
@@ -422,6 +677,15 @@ def predict(current_desc: str, prior_desc: str) -> bool:
     return False
 
 
+# Bare legacy descriptors that normalize to a single word but aren't specific
+# enough to mean "this study overlaps with the current one". On the public
+# split, prior == "PELVIC" was only 5 % True (n=161) — blocking it cleanly
+# converts FPs to TNs without meaningful TP loss. "ABDOMEN" is a coin flip
+# on this split (~12 %), which is wash for accuracy, so we do not block it
+# to avoid overfitting.
+_UNINFORMATIVE_BARE_PRIOR: frozenset[str] = frozenset({"PELVIC"})
+
+
 def predict_case(current_desc: str, prior_descs: list[str]) -> list[bool]:
     """Predict relevance for every prior in a single case.
 
@@ -439,6 +703,15 @@ def predict_case(current_desc: str, prior_descs: list[str]) -> list[bool]:
             out.append(False)
             continue
         pri = _sig(p)
+        if pri.norm in _UNINFORMATIVE_BARE_PRIOR:
+            out.append(False)
+            continue
+        if _negative_pair_hit(cur.norm, pri.norm):
+            out.append(False)
+            continue
+        if _is_laterality_mismatch(cur.norm, cur.regions, pri.norm, pri.regions):
+            out.append(False)
+            continue
         if cur.norm and cur.norm == pri.norm:
             out.append(True)
         elif cur_eff & _effective_regions(pri):

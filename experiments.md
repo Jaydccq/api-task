@@ -1,10 +1,10 @@
-# Experiments — Relevant Priors API
+# Experiments
 
-## TL;DR
+## TL
 
-- **Final accuracy on the public split:** 0.9542 (TP 6022, FP 719, TN 20328, FN 545).
-- **Total inference time on all 996 cases / 27,614 priors:** ~3 seconds.
-- **Approach:** deterministic regex heuristic — regions, modalities, study families, plus directional clinical-bridge rules. No LLM call in the request path.
+- **Final accuracy on the public split:** 0.9665 (TP 5997, FP 356, TN 20691, FN 570).
+- **Total inference time on all 996 cases / 27,614 priors:** ~1.1 seconds.
+- **Approach:** deterministic regex heuristic — regions, modalities, study families, directional clinical-bridge rules, plus pair-level anti-rules and a laterality-mismatch gate. No LLM call in the request path.
 - **Alternative tested:** logistic regression and gradient-boosted trees on top of the heuristic features via 5-fold group CV. Gains were within fold noise (+0.0 to +0.13 pp). The rule-only predictor was shipped for simplicity, reproducibility, and lower private-split risk.
 
 ## Data shape
@@ -24,35 +24,79 @@ The predictor computes three descriptors for every study description:
 2. **Regions** — 24 patterns (BRAIN, CHEST, BREAST, SPINE_L, HEART, …). One description can map to zero, one, or multiple regions. A `"head and neck"` post-filter removes BRAIN from descriptions that are actually soft-tissue neck studies (fixes 265 of 270 such pairs).
 3. **Families** — study classes that should mutually match regardless of region (mammography, cardiac, cancer workup, aortic screening, DXA, neurovascular). `cardiac` includes FFR/TTE/TEE/coronary/myo-perf; `cancer_workup` covers PET, bone scan, and whole-body oncology scans.
 
-A prior is predicted relevant iff **any** of:
+A prior is predicted relevant iff **all** of the following gates allow it and **any** of the positive rules fires:
+
+Negative gates (short-circuit to False, highest priority):
+
+0a. **Uninformative bare-prior block** — prior normalizes to a single
+    non-specific token (currently just `"PELVIC"`, which is 5 % True on
+    the public split).
+0b. **Pair-level anti-rules** — a list of (cur_pat, prior_pat) templates
+    for cross-rule false positives that can't be fixed by tightening any
+    single rule (e.g. CTA HEAD vs. carotid US matched via the CAROTID
+    family alias at 0 % True; US abdomen vs. bare "Abdomen" at 0 %; CT
+    abdpel W-con vs. bare "Abdomen" at 0 %; brain cur vs. sinus/maxfacial
+    prior at 17 %; TEE cur vs. chest XR prior at 11 %).
+0c. **Laterality-mismatch gate** — when the current and prior have
+    opposite side tokens (R/RT/RIGHT vs. L/LT/LFT/LEFT) and share a
+    paired body region (BREAST, KNEE, HIP, SHOULDER, ANKLE, FOOT, HAND,
+    ELBOW, LEG), force False. MAM LT cur → MAM RT prior was the single
+    largest source of FPs (42 on 43 pairs); extremity laterality
+    mismatches are 0 % True cumulatively. Midline regions (CHEST,
+    ABDOMEN, SPINE_*, BRAIN, HEART) are deliberately excluded.
+
+Positive rules (short-circuit to True in this order):
 
 1. Normalized equality with the current study.
 2. Region overlap, with a `WHOLEBODY` expansion that maps PET/bone-scan regions to torso regions (CHEST, ABDOMEN, PELVIS, SPINE_T, SPINE_L, HIP, AORTA, NECK).
 3. Family overlap.
-4. One of 19 **directional clinical bridge rules** fires. Each bridge states "if current matches X and prior matches Y, mark relevant"; adding the reverse is an explicit second rule. Some bridges have a context exclusion (cardiac → CT chest is suppressed when the current description contains CHEMO or LUM, because those are oncology-driven surveillance echoes where the prior chest CT is usually an unrelated staging scan).
+4. **Directional clinical bridge rules** — "if current matches X and prior matches Y, mark relevant"; adding the reverse is an explicit second rule. Some bridges have a context exclusion (cardiac → CT chest is suppressed when the current description contains CHEMO / LUM / DEFINITY; T-spine → chest XR is suppressed when the current is an MRI T-spine).
 
 ## Rule-ablation log
 
 Each row adds on top of the stack above.
 
-| # | Rule added | Accuracy | Precision | Recall |
-|---|------------|---------:|----------:|-------:|
-| 0 | Always False baseline                                           | 0.7622 | —     | 0.000 |
-| 1 | Exact-description match                                         | 0.7782 | 0.999 | 0.133 |
-| 2 | Region overlap                                                  | 0.8960 | 0.927 | 0.611 |
-| 3 | Region overlap + whole-body expansion + families                | 0.9364 | 0.912 | 0.811 |
-| 4 | Normalize-before-regex (fixes `ABD_PEL`, `CT ABD/PEL`)          | 0.9379 | 0.912 | 0.817 |
-| 5 | + high-precision bone-scan ↔ torso-CT bridge                    | 0.9453 | 0.914 | 0.851 |
-| 6 | + directional cardiac / T-spine / EEG / esophagram / biopsy     | 0.9484 | 0.890 | 0.894 |
-| 7 | + `CERVICL` / `CERV SPINE` typo patterns, MRI torso reverse     | 0.9496 | 0.891 | 0.898 |
-| 8 | + cholangiogram, thoracentesis, adjacent-spine bridges          | 0.9505 | 0.888 | 0.907 |
-| 9 | Narrow T-spine ↔ chest to studies with an explicit modality     | 0.9502 | 0.877 | 0.920 |
-| 10 | "HEAD AND NECK" post-filter on BRAIN (US soft-tissue neck)     | 0.9515 | 0.882 | 0.919 |
-| 11 | + pelvic-US / interventional / esophagram-XR bridges           | 0.9520 | 0.880 | 0.924 |
-| 12 | Cardiac-CT-chest bridge excludes CHEMO/LUM contexts             | 0.9526 | 0.885 | 0.921 |
-| 13 | Narrow neurovascular bridge to CT head only (drop MRI, reverse) | 0.9533 | 0.889 | 0.919 |
-| 14 | Drop T↔L spine bridge (base-rate level in public split)         | 0.9538 | 0.892 | 0.917 |
-| 15 | Drop SKULL from BRAIN pattern ("skull to thigh" was PET range)  | **0.9542** | 0.893 | 0.917 |
+| #   | Rule added                                                      |   Accuracy | Precision | Recall |
+| --- | --------------------------------------------------------------- | ---------: | --------: | -----: |
+| 0   | Always False baseline                                           |     0.7622 |         — |  0.000 |
+| 1   | Exact-description match                                         |     0.7782 |     0.999 |  0.133 |
+| 2   | Region overlap                                                  |     0.8960 |     0.927 |  0.611 |
+| 3   | Region overlap + whole-body expansion + families                |     0.9364 |     0.912 |  0.811 |
+| 4   | Normalize-before-regex (fixes `ABD_PEL`, `CT ABD/PEL`)          |     0.9379 |     0.912 |  0.817 |
+| 5   | + high-precision bone-scan ↔ torso-CT bridge                    |     0.9453 |     0.914 |  0.851 |
+| 6   | + directional cardiac / T-spine / EEG / esophagram / biopsy     |     0.9484 |     0.890 |  0.894 |
+| 7   | + `CERVICL` / `CERV SPINE` typo patterns, MRI torso reverse     |     0.9496 |     0.891 |  0.898 |
+| 8   | + cholangiogram, thoracentesis, adjacent-spine bridges          |     0.9505 |     0.888 |  0.907 |
+| 9   | Narrow T-spine ↔ chest to studies with an explicit modality     |     0.9502 |     0.877 |  0.920 |
+| 10  | "HEAD AND NECK" post-filter on BRAIN (US soft-tissue neck)      |     0.9515 |     0.882 |  0.919 |
+| 11  | + pelvic-US / interventional / esophagram-XR bridges            |     0.9520 |     0.880 |  0.924 |
+| 12  | Cardiac-CT-chest bridge excludes CHEMO/LUM contexts             |     0.9526 |     0.885 |  0.921 |
+| 13  | Narrow neurovascular bridge to CT head only (drop MRI, reverse) |     0.9533 |     0.889 |  0.919 |
+| 14  | Drop T↔L spine bridge (base-rate level in public split)         |     0.9538 |     0.892 |  0.917 |
+| 15  | Drop SKULL from BRAIN pattern ("skull to thigh" was PET range)  |     0.9542 |     0.893 |  0.917 |
+| 16  | Drop head-CT ↔ C-spine bridges (both dirs, ~10 % True)          |     0.9552 |     0.898 |  0.914 |
+| 17  | `thoracentesis→chest` bridge: drop PARACENTES (0 % True, 6 FP)  |     0.9555 |     0.900 |  0.914 |
+| 18  | Drop RIBS from T-spine→chest bridge; block bare "PELVIC" prior  |     0.9561 |     0.903 |  0.914 |
+| 19  | Drop T→C spine bridge entirely (36 % True → 21 FP, 12 TP)       |     0.9566 |     0.906 |  0.914 |
+| 20  | Add MRI pelvis→MRI L-spine & kidney↔abd US & CT cspine→CT head  |     0.9574 |     0.909 |  0.913 |
+| 21  | Suppress MRI T-spine→chest XR (45 % True = coin flip)           |     0.9577 |     0.911 |  0.913 |
+| 22  | Re-add narrow XR-T-spine→cspine bridge (71 % True)              |     0.9580 |     0.911 |  0.914 |
+| 23  | Add DEFINITY to cardiac-CT-chest exclusion (0 % True)           |     0.9583 |     0.912 |  0.914 |
+| 24  | Widen bilat-US↔mammo prior to include DIGITAL SCREENER          |     0.9587 |     0.912 |  0.914 |
+| 25  | Anti-rule: CTA head vs carotid US (0 % True, family alias FP)   |     0.9589 |     0.913 |  0.914 |
+| 26  | Anti-rule: US abdomen cur vs bare "Abdomen" prior (0 % True)    |     0.9592 |     0.913 |  0.914 |
+| 27  | Anti-rule: CT abdpel WO-con vs pelvic US (0 % True)             |     0.9593 |     0.914 |  0.914 |
+| 28  | Anti-rule: CT abdpel vs plain-film pelvis XR (0 % True, 6 FP)   |     0.9595 |     0.914 |  0.914 |
+| 29  | Anti-rule: plain chest XR vs WB bone scan (0 % True, 7 FP)      |     0.9597 |     0.915 |  0.914 |
+| 30  | CT chest→CT coronary calc bridge (100 % True, 7 FN)             |     0.9600 |     0.915 |  0.915 |
+| 31  | Laterality gate — BREAST + extremities paired regions           |     0.9634 |     0.930 |  0.915 |
+| 32  | Drop CT-angio-carotid→CT-head bridge (drifted to 44 % True)     |     0.9637 |     0.932 |  0.913 |
+| 33  | Anti-rule: CT abdpel W-con vs bare "Abdomen" (0 % True, 5 FP)   |     0.9652 |     0.939 |  0.913 |
+| 34  | Anti-rule: brain cur vs sinus/maxfacial prior (17 % True)       |     0.9656 |     0.941 |  0.913 |
+| 35  | Anti-rule: DXA hip vs unilateral hip XR (0 % True, 5 FP)        |     0.9658 |     0.942 |  0.913 |
+| 36  | Anti-rule: LUM TTE vs MYO PERF, CT FFR vs ECHO (both 0 % True)  |     0.9660 |     0.942 |  0.913 |
+| 37  | Anti-rule: US head-neck vs thyroid US, TEE vs chest XR          |     0.9664 |     0.944 |  0.913 |
+| 38  | Bridge: CT coronary calc → chest XR (62 % True)                 | **0.9665** |     0.944 |  0.913 |
 
 ## What worked
 
@@ -73,12 +117,14 @@ Each row adds on top of the stack above.
 ## Residual error analysis (top remaining misses)
 
 False positives (predicted True, labeled False):
+
 - `MRI thoracic spine` ↔ `CHEST 2V` — 7 cases. Thoracic-spine / chest-XR bridge fires but not every such pair is relevant.
 - `US abdomen complete w/ doppler` ↔ `Abdomen` — 7 cases. Short legacy descriptor, region match.
 - `MRI thoracic spine` ↔ `MRI CERV SPINE` / `CERVICL SPINE` — 11 cases. Adjacent-spine bridge holds at 36 % relevance overall but is wrong for these specific pairs.
 - `CT angio carotid` ↔ `CT HEAD` / `CT brain perfusion` — 11 cases. The carotid-angio ↔ CT-head bridge sits at 50 % relevance overall and we keep it, but particular pairs are labeled False.
 
 False negatives (predicted False, labeled True):
+
 - `ECHO Chemo TTE` ↔ `CT chest` — 8 cases. Accepted collateral from the CHEMO exclusion (prevented 18 FPs, kept 8 FNs).
 - `LUM TTE` / `CT angio coronary` ↔ plain chest XR — 10 cases. Cardiac → XR-chest bridge produced more FPs than TPs overall (13 % relevance vs 24 % base), so not added.
 - `CT HEAD` ↔ `CT angio carotid` — 5 cases. Reverse of the carotid bridge. Dropping the reverse bridge saves more FPs than these cost.
