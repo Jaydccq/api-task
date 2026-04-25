@@ -421,6 +421,25 @@ _BRIDGE_RULES: list[tuple[str, str, str]] = [
         r"CT\s+CORONARY\s+CALC|CORONARY\s+CALC\s+SCREEN|CALCIUM\s+SCORE",
         r"CHEST\s+\d+\s*V|CHEST\s+1\s*V|\bCXR\b|XR\s+CHEST",
     ),
+    # Paracentesis (current, peritoneal tap — abdominal procedure) → any
+    # prior abdominal imaging. 9 / 9 True on the public split (CT abd, CT
+    # renal colic, US abdomen). PARACENTESIS itself has no region/family
+    # token, so the pair previously fell through all positive rules.
+    (
+        "current_paracentesis__prior_abd_imaging",
+        r"PARACENTES",
+        r"\bCT\b\s+ABD|\bCT\b\s+RENAL\s+COLIC|MRI?\s+ABD|US\s+ABDOM",
+    ),
+    # Breast seed localization (current, pre-op wire/seed placement) →
+    # mammography / breast ultrasound prior. 9 / 10 True on the public
+    # split. Seed localization descriptions (e.g. "Seed Localization US
+    # Right") don't include MAM/BREAST tokens themselves, so they miss
+    # the mammography family without an explicit bridge.
+    (
+        "current_seed_localization__prior_breast_us_mammo",
+        r"SEED\s+LOCALIZ|LOCALIZ.*BREAST",
+        r"MAM\s+US|US\s+BREAST|MAMMO|MAM\s+BI|MAM\s+SCREEN",
+    ),
 ]
 
 _BRIDGE_COMPILED: list[tuple[str, re.Pattern[str], re.Pattern[str]]] = [
@@ -565,6 +584,15 @@ _NEGATIVE_PAIR_RULES: list[tuple[str, str, str]] = [
         "tee_cur_vs_chest_xr_prior",
         r"ECHO\s+TRANSESOPH|\bTEE\b",
         r"CHEST\s+\d+\s*V|CHEST\s+1\s*V|\bCXR\b|XR\s+CHEST",
+    ),
+    # Mammography (current) vs lymphoscintogram (prior): 0 / 2 True. Both
+    # match the mammography family (`BREAST`), but a lymphoscintogram is
+    # a nuclear medicine sentinel-node injection — not a comparator for
+    # diagnostic mammography.
+    (
+        "mam_cur_vs_lymphoscintogram_prior",
+        r"MAM\s+SCREEN|MAM\s+DIAG|MAMMO|MAM\s+BI",
+        r"LYMPHOSCINTOGRAM|LYMPHOSCINT|LYMPHO\s*SCAN",
     ),
 ]
 

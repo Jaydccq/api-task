@@ -10,8 +10,8 @@ boolean per prior indicating clinical relevance. The predictor is a
 deterministic regex heuristic — no external calls at request time, so it
 cannot time out against the evaluator's 360 s budget.
 
-Current accuracy on the public split: **0.9665** (TP 5997 / FP 356 / TN
-20691 / FN 570) in ~1.1 s across all 996 cases / 27,614 priors. See
+Current accuracy on the public split: **0.9672** (TP 6015 / FP 355 / TN
+20692 / FN 552) in ~1.2 s across all 996 cases / 27,614 priors. See
 `experiments.md` for the full rule-ablation log.
 
 ## Commands

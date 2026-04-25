@@ -2,8 +2,8 @@
 
 ## TL
 
-- **Final accuracy on the public split:** 0.9665 (TP 5997, FP 356, TN 20691, FN 570).
-- **Total inference time on all 996 cases / 27,614 priors:** ~1.1 seconds.
+- **Final accuracy on the public split:** 0.9672 (TP 6015, FP 355, TN 20692, FN 552).
+- **Total inference time on all 996 cases / 27,614 priors:** ~1.2 seconds.
 - **Approach:** deterministic regex heuristic — regions, modalities, study families, directional clinical-bridge rules, plus pair-level anti-rules and a laterality-mismatch gate. No LLM call in the request path.
 - **Alternative tested:** logistic regression and gradient-boosted trees on top of the heuristic features via 5-fold group CV. Gains were within fold noise (+0.0 to +0.13 pp). The rule-only predictor was shipped for simplicity, reproducibility, and lower private-split risk.
 
@@ -96,7 +96,8 @@ Each row adds on top of the stack above.
 | 35  | Anti-rule: DXA hip vs unilateral hip XR (0 % True, 5 FP)        |     0.9658 |     0.942 |  0.913 |
 | 36  | Anti-rule: LUM TTE vs MYO PERF, CT FFR vs ECHO (both 0 % True)  |     0.9660 |     0.942 |  0.913 |
 | 37  | Anti-rule: US head-neck vs thyroid US, TEE vs chest XR          |     0.9664 |     0.944 |  0.913 |
-| 38  | Bridge: CT coronary calc → chest XR (62 % True)                 | **0.9665** |     0.944 |  0.913 |
+| 38  | Bridge: CT coronary calc → chest XR (62 % True)                 |     0.9665 |     0.944 |  0.913 |
+| 39  | Bridge: paracentesis → abd imaging (100 %); seed-loc → breast US (90 %); anti-rule MAM → lymphoscintogram (0 %) | **0.9672** | 0.944 | 0.916 |
 
 ## What worked
 

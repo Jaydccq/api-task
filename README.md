@@ -17,7 +17,7 @@ Measured on the public labeled split (996 cases, 27,614 priors):
 | Model | Accuracy | Precision | Recall | Elapsed |
 |---|---|---|---|---|
 | Always False (baseline) | 0.7622 | — | 0.000 | — |
-| This predictor | **0.9665** | 0.944 | 0.913 | ~1.1 s total |
+| This predictor | **0.9672** | 0.944 | 0.916 | ~1.2 s total |
 
 See `experiments.md` for the rule-ablation log.
 
