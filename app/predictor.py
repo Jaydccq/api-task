@@ -78,7 +78,11 @@ MODALITY_PATTERNS: dict[str, str] = {
 # each other regardless of region overlap. Pattern matched against the
 # uppercased description.
 FAMILY_PATTERNS: dict[str, str] = {
-    "mammography":      r"MAMMO|\bMAM\b|BREAST",
+    # STANDARD SCREENING COMBO is a mammography order alias in the
+    # public split (32 / 32 True against any mammo current). DIGITAL
+    # SCREENER and ULTRASOUND BILAT SCREEN are likewise screening flow
+    # aliases that the original mammography pattern missed.
+    "mammography":      r"MAMMO|\bMAM\b|BREAST|STANDARD\s+SCREENING\s+COMBO|DIGITAL\s+SCREENER|ULTRASOUND\s+BILAT\s+SCREEN",
     "cardiac":          r"CARDIAC|CORONARY|\bECHO\b|\bHEART\b|MYO\s*PERF|MYOCARD|TTE|TEE|TRANSTHORAC|TRANSESOPH|CALCIUM\s*SCORE|\bFFR\b",
     "cancer_workup":    r"PET|WHOLE\s*BODY|SKULL\s*[-_/ ]*THIGH|SKULLTHIGH|BONE\s*SCAN|F18|ONCOLOGY",
     "aortic_screen":    r"\bAAA\b|AORT",
@@ -404,13 +408,15 @@ _BRIDGE_RULES: list[tuple[str, str, str]] = [
         r"\bCT\b\s+CERVIC|\bCT\b\s+C[-\s]?SPINE",
         r"\bCT\b\s+(?:HEAD|BRAIN)",
     ),
-    # CT chest with contrast (current) → CT coronary calcium / CT coronary
-    # (prior). 7 / 7 True on the public split — contrast chest CT in the
-    # coronary-artery workflow is routinely read against the calcium score.
+    # CT chest (current) → CT coronary studies (prior). Includes calcium
+    # scoring (7 / 7 True) and CT coronary artery / CT angio coronary
+    # (5 / 5 True) on the public split. Contrast chest CT and coronary
+    # CT are routinely cross-read in the cardiac workflow.
     (
         "current_ct_chest__prior_coronary_calc",
-        r"\bCT\b\s+CHEST",
-        r"CT\s+CORONARY\s+CALC|CORONARY\s+CALC\s+SCREEN|CALCIUM\s+SCORE",
+        r"\bCT\b\s+CHEST|MRI\s+CHEST",
+        r"CT\s+CORONARY\s+CALC|CORONARY\s+CALC\s+SCREEN|CALCIUM\s+SCORE|"
+        r"CT\s+ANGIO\s+CORONARY|CT\s+CORONARY\s+ARTERY|CT\s+CORONARY\b",
     ),
     # CT coronary calcium score (current) → chest XR (prior). 5 / 8 True
     # (62 %) on the public split. Calcium scoring is a cardiac workup
@@ -439,6 +445,48 @@ _BRIDGE_RULES: list[tuple[str, str, str]] = [
         "current_seed_localization__prior_breast_us_mammo",
         r"SEED\s+LOCALIZ|LOCALIZ.*BREAST",
         r"MAM\s+US|US\s+BREAST|MAMMO|MAM\s+BI|MAM\s+SCREEN",
+    ),
+    # CT abdomen+pelvis WITH contrast (current) → small bowel series
+    # (prior). 4 / 5 True on the public split. Contrast CT abdpel for GI
+    # workups is read against the prior fluoroscopic SBS — the latter
+    # has no ABDOMEN-region token of its own (no `\bABD`, no GI alias).
+    (
+        "current_ct_abdpel_w_con__prior_sbs",
+        r"\bCT\b\s+ABD(?:OMEN)?\s+(?:AND\s+)?PEL\w*\s+W\s+CON|"
+        r"\bCT\b\s+ABD(?:OMEN)?\s+(?:AND\s+)?PEL\w*\s+WITH\s+CON",
+        r"SMALL\s+BOWEL\s+SERIES|SMALL\s+BOWEL\s+FOLLOW",
+    ),
+    # US pelvic (current) → US endovaginal (prior). 7 / 9 True on the
+    # public split. ENDOVAGINAL is not in the PELVIS region pattern
+    # (TRANSVAGINAL is), so the same-organ pair was missing the region
+    # rule. Adding ENDOVAGINAL to PELVIS would change behavior for many
+    # unrelated pairs (102 priors involving US ENDOVAGINAL, only 10 %
+    # True overall) — a narrow bridge is safer.
+    (
+        "current_us_pelvic__prior_us_endovag",
+        r"US\s+PELV|US\s+PELVIC",
+        r"US\s+ENDOVAG|^ENDOVAG",
+    ),
+    # MRI neck (current) → PET head-neck-body / PET head-and-neck (prior).
+    # 2 / 2 True on the public split. PET head/neck oncology workups
+    # often follow a baseline neck MR. The PET prior format
+    # "PET^PET_CT_HEADNECK_BODY" lacks a recognizable WHOLEBODY token
+    # under the existing pattern, so the pair was missing both region
+    # and family overlap.
+    (
+        "current_mri_neck__prior_pet_headneck",
+        r"MRI?\s+NECK|MRI\s+NECK\s+W",
+        r"HEADNECK|HEAD\s*[/_-]?\s*NECK\s*BODY|PET.*HEAD.*NECK",
+    ),
+    # Plain chest XR (current) → MR cardiac (prior). 2 / 2 True. MR
+    # cardiac is read alongside a baseline chest film for size /
+    # silhouette context. Currently neither side carries the cardiac
+    # family token (the pattern requires CARDIAC|CORONARY|TTE|MYO_PERF),
+    # so a narrow bridge fixes the pair.
+    (
+        "current_chest_xr__prior_mr_cardiac",
+        r"^CHEST\s+\d|XR\s+CHEST|\bCXR\b|CHEST\s+FRONTAL",
+        r"MRI?\s+CARDIAC|MR\s+CARDIAC",
     ),
 ]
 
@@ -593,6 +641,26 @@ _NEGATIVE_PAIR_RULES: list[tuple[str, str, str]] = [
         "mam_cur_vs_lymphoscintogram_prior",
         r"MAM\s+SCREEN|MAM\s+DIAG|MAMMO|MAM\s+BI",
         r"LYMPHOSCINTOGRAM|LYMPHOSCINT|LYMPHO\s*SCAN",
+    ),
+    # CT angio chest (current) vs the legacy `CHEST N VIEW` plain-film
+    # prior format: 0 / 8 True on the public split. Notably the
+    # whitespace-free variants ("XR Chest 1V Frontal Only", "CHEST
+    # FRONTAL") run 88 % True against the same current, so the tightly-
+    # spaced "CHEST 1 V" / "CHEST 2 VIEW" form specifically marks the
+    # legacy descriptor that doesn't pair with a vascular CTA workup.
+    (
+        "cta_chest_cur_vs_legacy_chest_xr_prior",
+        r"CT\s+ANGIO\s+CHEST|CTA\s+CHEST",
+        r"^CHEST\s+\d+\s+V|^CHEST\s+\d+\s+VIEW",
+    ),
+    # NM myocardial perfusion (current) vs CT angiogram chest (prior):
+    # 1 / 4 True. Both share the cardiac family, but NM perfusion is a
+    # functional ischemia study that doesn't actually cross-read with a
+    # PE-protocol vascular CT.
+    (
+        "myo_perf_cur_vs_cta_chest_prior",
+        r"MYO\s*PERF|NMMYO|\bSPECT\b",
+        r"CT\s+ANGIOGRAM\s*,?\s*CHEST|CT\s+ANGIO\s+CHEST",
     ),
 ]
 

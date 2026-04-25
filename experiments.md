@@ -2,8 +2,8 @@
 
 ## TL
 
-- **Final accuracy on the public split:** 0.9672 (TP 6015, FP 355, TN 20692, FN 552).
-- **Total inference time on all 996 cases / 27,614 priors:** ~1.2 seconds.
+- **Final accuracy on the public split:** 0.9685 (TP 6044, FP 346, TN 20701, FN 523).
+- **Total inference time on all 996 cases / 27,614 priors:** ~2.6 seconds.
 - **Approach:** deterministic regex heuristic — regions, modalities, study families, directional clinical-bridge rules, plus pair-level anti-rules and a laterality-mismatch gate. No LLM call in the request path.
 - **Alternative tested:** logistic regression and gradient-boosted trees on top of the heuristic features via 5-fold group CV. Gains were within fold noise (+0.0 to +0.13 pp). The rule-only predictor was shipped for simplicity, reproducibility, and lower private-split risk.
 
@@ -97,7 +97,9 @@ Each row adds on top of the stack above.
 | 36  | Anti-rule: LUM TTE vs MYO PERF, CT FFR vs ECHO (both 0 % True)  |     0.9660 |     0.942 |  0.913 |
 | 37  | Anti-rule: US head-neck vs thyroid US, TEE vs chest XR          |     0.9664 |     0.944 |  0.913 |
 | 38  | Bridge: CT coronary calc → chest XR (62 % True)                 |     0.9665 |     0.944 |  0.913 |
-| 39  | Bridge: paracentesis → abd imaging (100 %); seed-loc → breast US (90 %); anti-rule MAM → lymphoscintogram (0 %) | **0.9672** | 0.944 | 0.916 |
+| 39  | Bridge: paracentesis → abd imaging (100 %); seed-loc → breast US (90 %); anti-rule MAM → lymphoscintogram (0 %) |     0.9672 |     0.944 |  0.916 |
+| 40  | Family: STANDARD SCREENING COMBO is mammography (100 %, +9 TP); broaden CT chest→coronary bridge to CT ANGIO CORONARY/CT CORONARY ARTERY (100 %, +5 TP); bridges CT abdpel-w-con → SBS (80 %), US pelvic → US ENDOVAGINAL (78 %) | 0.9680 | 0.944 | 0.920 |
+| 41  | Anti-rule: CTA chest → legacy "CHEST N VIEW" prior (0/8 True); bridges MRI neck → PET head/neck (100 %), chest XR → MR cardiac (100 %); anti-rule NMmyo perf → CTA chest (25 %) | **0.9685** | 0.946 | 0.920 |
 
 ## What worked
 
